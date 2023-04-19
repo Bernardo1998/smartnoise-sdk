@@ -1,6 +1,10 @@
 
 from snsynth.transform.definitions import ColumnType
 
+# BND04192023: add parallel processing
+import concurrent.futures
+
+
 
 class ColumnTransformer:
     """Base class for column transformers.  Subclasses must implement the
@@ -85,10 +89,16 @@ class ColumnTransformer:
             t.fit(iris, 0)  # fit the first column of iris
             iris_encoded = t.transform(iris, 0)  # transform the first column of iris
         """
+        # BND 04192023: apply parallel processing
         if idx is None:
-            return [self._transform(val) for val in data]
+            with concurrent.futures.ProcessPoolExecutor() as executor:
+                transformed_data = list(executor.map(self._transform, data))
         else:
-            return [self._transform(row[idx]) for row in data]
+            def _wrapper(self, row, idx):
+                return self._transform(row[idx])
+            with concurrent.futures.ProcessPoolExecutor() as executor:
+                transformed_data = list(executor.map(self._wrapper, data, [idx] * len(data)))
+        return transformed_data
     def fit_transform(self, data, idx=None):
         """Fit and transform a column of data.  If data includes multiple columns,
         provide an index to select which column to fit.  If no index is supplied,
@@ -120,10 +130,17 @@ class ColumnTransformer:
             assert(all([a == b for a, b in zip(iris[0], iris_decoded)]))
             
         """
+
+        # BND 04192023: apply parallel processing
         if idx is None:
-            return [self._inverse_transform(val) for val in data]
+            with concurrent.futures.ProcessPoolExecutor() as executor:
+                inversed_data = list(executor.map(self._inverse_transform, data))
         else:
-            return [self._inverse_transform(row[idx]) for row in data]
+            def _wrapper(self, row, idx):
+                return self._inverse_transform(row[idx])
+            with concurrent.futures.ProcessPoolExecutor() as executor:
+                inversed_data = list(executor.map(self._wrapper, data, [idx] * len(data)))
+        return inversed_data
     def _fit(self, val):
         """Must be implemented by subclasses to fit a single value.
         """
