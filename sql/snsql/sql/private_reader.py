@@ -51,6 +51,7 @@ class PrivateReader(Reader):
         self.metadata = Metadata.from_(metadata)
         self.rewriter = Rewriter(metadata)
         self._options = PrivateReaderOptions()
+        self._initial_options()
 
         if privacy:
             self.privacy = privacy
@@ -95,17 +96,17 @@ class PrivateReader(Reader):
         """
         return self.reader.engine
 
-    def _refresh_options(self):
-        self.rewriter = Rewriter(self.metadata, privacy=self.privacy)
-        self.metadata.compare = self.reader.compare
+    def _initial_options(self):
         tables = self.metadata.tables()
         self._options.row_privacy = any([t.row_privacy for t in tables])
         self._options.censor_dims = not any([not t.censor_dims for t in tables])
         self._options.reservoir_sample = any([t.sample_max_ids for t in tables])
         self._options.clamp_counts = any([t.clamp_counts for t in tables])
-        self._options.max_contrib = max([t.max_ids for t in tables])
         self._options.use_dpsu = any([t.use_dpsu for t in tables])
         self._options.clamp_columns = any([t.clamp_columns for t in tables])
+    def _refresh_options(self):
+        self.rewriter = Rewriter(self.metadata, privacy=self.privacy)
+        self.metadata.compare = self.reader.compare
 
         self.rewriter.options.row_privacy = self._options.row_privacy
         self.rewriter.options.reservoir_sample = self._options.reservoir_sample
@@ -280,8 +281,7 @@ This could lead to privacy leaks."""
         if isinstance(query, str):
             raise ValueError("Please pass a Query AST object to _rewrite_ast()")
         query_max_contrib = query.max_ids
-        if self._options.max_contrib is None or self._options.max_contrib > query_max_contrib:
-            self._options.max_contrib = query_max_contrib
+        self._options.max_contrib = query_max_contrib
 
         self._refresh_options()
         query = self.rewriter.query(query)
@@ -496,6 +496,22 @@ This could lead to privacy leaks."""
             raise ValueError("Please pass AST to _execute_ast.")
 
         _orig_query = query
+
+        agg_names = []
+        for col in _orig_query.select.namedExpressions:
+            if isinstance(col.expression, ast.AggFunction):
+                agg_names.append(col.expression.name)
+            else:
+                agg_names.append(None)
+
+        self._options.row_privacy = query.row_privacy
+        self._options.censor_dims = query.censor_dims
+        self._options.reservoir_sample = query.sample_max_ids
+        self._options.clamp_counts = query.clamp_counts
+        self._options.use_dpsu = query.use_dpsu
+        self._options.clamp_columns = query.clamp_columns
+        self._refresh_options()
+
         subquery, query = self._rewrite_ast(query)
 
         if pre_aggregated is not None:
@@ -616,6 +632,16 @@ This could lead to privacy leaks."""
         def process_out_row(row):
             bindings = dict((name.lower(), val) for name, val in zip(source_col_names, row))
             out_row = [c.expression.evaluate(bindings) for c in query.select.namedExpressions]
+            # fix up case where variance is negative
+            out_row_fixed = []
+            for val, agg in zip(out_row, agg_names):
+                if agg == 'VAR' and val < 0:
+                    out_row_fixed.append(0.0)
+                elif agg == 'STDDEV' and np.isnan(val):
+                    out_row_fixed.append(0.0)
+                else:
+                    out_row_fixed.append(val)
+            out_row = out_row_fixed
             try:
                 out_row =[convert(val, type) for val, type in zip(out_row, out_types)]
             except Exception as e:
