@@ -17,7 +17,7 @@ package_data = \
 {'': ['*']}
 
 install_requires = \
-['PyYAML>=5.4.1,<6.0.0',
+['PyYAML>=5.4.1,<=6.0.1',
  'antlr4-python3-runtime==4.9.3',
  'graphviz>=0.17,<0.18',
  'opendp>=0.6.0,<0.7.0',
